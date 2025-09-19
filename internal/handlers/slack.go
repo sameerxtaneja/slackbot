@@ -15,6 +15,7 @@ import (
 
 	"github.com/pratikgajjar/fambot-go/internal/database"
 	"github.com/pratikgajjar/fambot-go/internal/models"
+	"github.com/pratikgajjar/fambot-go/internal/whoop"
 )
 
 var (
@@ -29,16 +30,22 @@ type SlackHandler struct {
 	botID           string
 	peopleChannel   string
 	gratefulChannel string
+	standupChannel  string
 	workspaceID     string
+	whoopService    *whoop.Service
+	whoopFormatter  *whoop.MessageFormatter
 }
 
 // New creates a new SlackHandler
-func New(client *slack.Client, db *database.Database, peopleChannel, gratefulChannel string) *SlackHandler {
+func New(client *slack.Client, db *database.Database, peopleChannel, gratefulChannel, standupChannel string, whoopService *whoop.Service) *SlackHandler {
 	return &SlackHandler{
 		client:          client,
 		db:              db,
 		peopleChannel:   peopleChannel,
 		gratefulChannel: gratefulChannel,
+		standupChannel:  standupChannel,
+		whoopService:    whoopService,
+		whoopFormatter:  whoop.NewMessageFormatter(),
 	}
 }
 
@@ -278,6 +285,14 @@ func (h *SlackHandler) handleSlashCommand(cmd slack.SlashCommand) {
 		h.handleMyKarmaCommand(cmd)
 	case "/fambot-help":
 		h.handleHelpCommand(cmd)
+	case "/connect-whoop":
+		h.handleConnectWHOOPCommand(cmd)
+	case "/whoop-status":
+		h.handleWHOOPStatusCommand(cmd)
+	case "/morning-report":
+		h.handleMorningReportCommand(cmd)
+	case "/disconnect-whoop":
+		h.handleDisconnectWHOOPCommand(cmd)
 	default:
 		h.respondToSlashCommand(cmd, "Unknown command! Use `/fambot-help` to see available commands.")
 	}
@@ -682,4 +697,152 @@ func getOrdinalSuffix(n int) string {
 	default:
 		return "th"
 	}
+}
+
+// WHOOP-related handlers
+
+// handleConnectWHOOPCommand handles the /connect-whoop slash command
+func (h *SlackHandler) handleConnectWHOOPCommand(cmd slack.SlashCommand) {
+	if h.whoopService == nil {
+		h.respondToSlashCommand(cmd, "WHOOP integration is not configured. Please contact your administrator.")
+		return
+	}
+
+	// Check if user is already connected
+	connection, err := h.whoopService.GetConnectionStatus(cmd.UserID)
+	if err == nil && connection != nil {
+		h.respondToSlashCommand(cmd, "🔗 You're already connected to WHOOP! Use `/whoop-status` to see your stats or `/disconnect-whoop` to disconnect.")
+		return
+	}
+
+	// Generate auth URL
+	authURL := h.whoopService.GetAuthURL(cmd.UserID)
+	
+	response := fmt.Sprintf("🚀 *Connect Your WHOOP Account*\n\n" +
+		"Click the link below to authorize FamBot to access your WHOOP data:\n\n" +
+		"<%s|🔗 Connect WHOOP Account>\n\n" +
+		"_This will allow the bot to show your sleep, recovery, and strain data in morning standups!_", authURL)
+	
+	h.respondToSlashCommand(cmd, response)
+}
+
+// handleWHOOPStatusCommand handles the /whoop-status slash command
+func (h *SlackHandler) handleWHOOPStatusCommand(cmd slack.SlashCommand) {
+	if h.whoopService == nil {
+		h.respondToSlashCommand(cmd, "WHOOP integration is not configured. Please contact your administrator.")
+		return
+	}
+
+	// Check if user is connected
+	_, err := h.whoopService.GetConnectionStatus(cmd.UserID)
+	if err != nil {
+		h.respondToSlashCommand(cmd, "❌ You're not connected to WHOOP yet! Use `/connect-whoop` to link your account.")
+		return
+	}
+
+	// Sync user data first
+	if err := h.whoopService.SyncUserData(cmd.UserID); err != nil {
+		log.Printf("Failed to sync WHOOP data for user %s: %v", cmd.UserID, err)
+		h.respondToSlashCommand(cmd, "⚠️ Connected to WHOOP, but couldn't fetch latest data. Please try again later.")
+		return
+	}
+
+	// Get user's latest data
+	userData, err := h.whoopService.GetUserLatestData(cmd.UserID)
+	if err != nil {
+		h.respondToSlashCommand(cmd, "❌ Failed to retrieve your WHOOP data. Please try again later.")
+		return
+	}
+
+	// Add user info to data
+	userInfo, err := h.client.GetUserInfo(cmd.UserID)
+	if err == nil {
+		userData["username"] = userInfo.Name
+		userData["real_name"] = userInfo.RealName
+	}
+
+	// Format the status message
+	message := h.whoopFormatter.FormatUserStatus(userData)
+	h.respondToSlashCommand(cmd, message)
+}
+
+// handleMorningReportCommand handles the /morning-report slash command
+func (h *SlackHandler) handleMorningReportCommand(cmd slack.SlashCommand) {
+	if h.whoopService == nil {
+		h.respondToSlashCommand(cmd, "WHOOP integration is not configured. Please contact your administrator.")
+		return
+	}
+
+	// Sync all users' data first
+	if err := h.whoopService.SyncAllUsersData(); err != nil {
+		log.Printf("Failed to sync WHOOP data for morning report: %v", err)
+		h.respondToSlashCommand(cmd, "⚠️ Failed to sync WHOOP data. Showing last available data...")
+	}
+
+	// Get team data
+	teamData, err := h.db.GetTeamWHOOPDataForStandup()
+	if err != nil {
+		h.respondToSlashCommand(cmd, "❌ Failed to retrieve team WHOOP data. Please try again later.")
+		return
+	}
+
+	// Format the morning report
+	message := h.whoopFormatter.FormatMorningStandup(teamData)
+	h.respondToSlashCommand(cmd, message)
+}
+
+// handleDisconnectWHOOPCommand handles the /disconnect-whoop slash command
+func (h *SlackHandler) handleDisconnectWHOOPCommand(cmd slack.SlashCommand) {
+	if h.whoopService == nil {
+		h.respondToSlashCommand(cmd, "WHOOP integration is not configured. Please contact your administrator.")
+		return
+	}
+
+	// Check if user is connected
+	_, err := h.whoopService.GetConnectionStatus(cmd.UserID)
+	if err != nil {
+		h.respondToSlashCommand(cmd, "❌ You're not connected to WHOOP. Nothing to disconnect!")
+		return
+	}
+
+	// Disconnect user
+	if err := h.whoopService.DisconnectUser(cmd.UserID); err != nil {
+		h.respondToSlashCommand(cmd, "❌ Failed to disconnect your WHOOP account. Please try again later.")
+		return
+	}
+
+	h.respondToSlashCommand(cmd, "✅ Successfully disconnected from WHOOP. Use `/connect-whoop` if you want to reconnect later!")
+}
+
+// SendMorningStandup sends the morning standup message to the configured channel
+func (h *SlackHandler) SendMorningStandup() {
+	if h.whoopService == nil {
+		log.Println("WHOOP service not configured, skipping morning standup")
+		return
+	}
+
+	// Sync all users' data first
+	if err := h.whoopService.SyncAllUsersData(); err != nil {
+		log.Printf("Failed to sync WHOOP data for morning standup: %v", err)
+	}
+
+	// Get team data
+	teamData, err := h.db.GetTeamWHOOPDataForStandup()
+	if err != nil {
+		log.Printf("Failed to get team WHOOP data: %v", err)
+		return
+	}
+
+	// Skip if no team members have connected WHOOP accounts
+	if len(teamData) == 0 {
+		log.Println("No team members connected to WHOOP, skipping morning standup")
+		return
+	}
+
+	// Format the message
+	message := h.whoopFormatter.FormatMorningStandup(teamData)
+
+	// Send to standup channel
+	h.sendMessage(h.standupChannel, message)
+	log.Printf("Sent morning WHOOP standup to channel %s", h.standupChannel)
 }

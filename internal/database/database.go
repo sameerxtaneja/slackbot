@@ -99,6 +99,52 @@ func (d *Database) createTables() error {
 			category TEXT NOT NULL,
 			active BOOLEAN DEFAULT 1
 		)`,
+		`CREATE TABLE IF NOT EXISTS whoop_connections (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			whoop_user_id TEXT NOT NULL,
+			access_token TEXT NOT NULL,
+			refresh_token TEXT NOT NULL,
+			expires_at DATETIME NOT NULL,
+			connected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			active BOOLEAN DEFAULT 1,
+			UNIQUE(user_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS whoop_recovery (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			whoop_user_id TEXT NOT NULL,
+			date DATE NOT NULL,
+			score INTEGER NOT NULL,
+			hrv REAL NOT NULL,
+			rhr INTEGER NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(user_id, date)
+		)`,
+		`CREATE TABLE IF NOT EXISTS whoop_sleep (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			whoop_user_id TEXT NOT NULL,
+			date DATE NOT NULL,
+			duration_ms INTEGER NOT NULL,
+			efficiency REAL NOT NULL,
+			score INTEGER NOT NULL,
+			stages_deep_ms INTEGER NOT NULL,
+			stages_rem_ms INTEGER NOT NULL,
+			stages_light_ms INTEGER NOT NULL,
+			stages_wake_ms INTEGER NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(user_id, date)
+		)`,
+		`CREATE TABLE IF NOT EXISTS whoop_strain (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id TEXT NOT NULL,
+			whoop_user_id TEXT NOT NULL,
+			date DATE NOT NULL,
+			score REAL NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(user_id, date)
+		)`,
 	}
 
 	for _, query := range queries {
@@ -331,4 +377,222 @@ func (d *Database) insertDefaultSassyResponses() error {
 	}
 
 	return nil
+}
+
+// WHOOP Connection operations
+func (d *Database) UpsertWHOOPConnection(conn *models.WHOOPConnection) error {
+	query := `INSERT OR REPLACE INTO whoop_connections (user_id, whoop_user_id, access_token, refresh_token, expires_at, connected_at, active) 
+			  VALUES (?, ?, ?, ?, ?, ?, ?)`
+	_, err := d.db.Exec(query, conn.UserID, conn.WHOOPUserID, conn.AccessToken, conn.RefreshToken, conn.ExpiresAt, conn.ConnectedAt, conn.Active)
+	return err
+}
+
+func (d *Database) GetWHOOPConnection(userID string) (*models.WHOOPConnection, error) {
+	query := `SELECT id, user_id, whoop_user_id, access_token, refresh_token, expires_at, connected_at, active FROM whoop_connections WHERE user_id = ? AND active = 1`
+	row := d.db.QueryRow(query, userID)
+
+	var conn models.WHOOPConnection
+	err := row.Scan(&conn.ID, &conn.UserID, &conn.WHOOPUserID, &conn.AccessToken, &conn.RefreshToken, &conn.ExpiresAt, &conn.ConnectedAt, &conn.Active)
+	if err != nil {
+		return nil, err
+	}
+	return &conn, nil
+}
+
+func (d *Database) GetAllActiveWHOOPConnections() ([]models.WHOOPConnection, error) {
+	query := `SELECT id, user_id, whoop_user_id, access_token, refresh_token, expires_at, connected_at, active FROM whoop_connections WHERE active = 1`
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var connections []models.WHOOPConnection
+	for rows.Next() {
+		var conn models.WHOOPConnection
+		err := rows.Scan(&conn.ID, &conn.UserID, &conn.WHOOPUserID, &conn.AccessToken, &conn.RefreshToken, &conn.ExpiresAt, &conn.ConnectedAt, &conn.Active)
+		if err != nil {
+			return nil, err
+		}
+		connections = append(connections, conn)
+	}
+
+	return connections, nil
+}
+
+func (d *Database) DeactivateWHOOPConnection(userID string) error {
+	query := `UPDATE whoop_connections SET active = 0 WHERE user_id = ?`
+	_, err := d.db.Exec(query, userID)
+	return err
+}
+
+// WHOOP Recovery operations
+func (d *Database) UpsertWHOOPRecovery(recovery *models.WHOOPRecovery) error {
+	query := `INSERT OR REPLACE INTO whoop_recovery (user_id, whoop_user_id, date, score, hrv, rhr, created_at) 
+			  VALUES (?, ?, ?, ?, ?, ?, ?)`
+	_, err := d.db.Exec(query, recovery.UserID, recovery.WHOOPUserID, recovery.Date, recovery.Score, recovery.HRV, recovery.RHR, recovery.CreatedAt)
+	return err
+}
+
+func (d *Database) GetLatestWHOOPRecovery(userID string) (*models.WHOOPRecovery, error) {
+	query := `SELECT id, user_id, whoop_user_id, date, score, hrv, rhr, created_at FROM whoop_recovery WHERE user_id = ? ORDER BY date DESC LIMIT 1`
+	row := d.db.QueryRow(query, userID)
+
+	var recovery models.WHOOPRecovery
+	err := row.Scan(&recovery.ID, &recovery.UserID, &recovery.WHOOPUserID, &recovery.Date, &recovery.Score, &recovery.HRV, &recovery.RHR, &recovery.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &recovery, nil
+}
+
+func (d *Database) GetWHOOPRecoveryForDate(userID string, date time.Time) (*models.WHOOPRecovery, error) {
+	dateStr := date.Format("2006-01-02")
+	query := `SELECT id, user_id, whoop_user_id, date, score, hrv, rhr, created_at FROM whoop_recovery WHERE user_id = ? AND date = ?`
+	row := d.db.QueryRow(query, userID, dateStr)
+
+	var recovery models.WHOOPRecovery
+	err := row.Scan(&recovery.ID, &recovery.UserID, &recovery.WHOOPUserID, &recovery.Date, &recovery.Score, &recovery.HRV, &recovery.RHR, &recovery.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &recovery, nil
+}
+
+// WHOOP Sleep operations
+func (d *Database) UpsertWHOOPSleep(sleep *models.WHOOPSleep) error {
+	query := `INSERT OR REPLACE INTO whoop_sleep (user_id, whoop_user_id, date, duration_ms, efficiency, score, stages_deep_ms, stages_rem_ms, stages_light_ms, stages_wake_ms, created_at) 
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err := d.db.Exec(query, sleep.UserID, sleep.WHOOPUserID, sleep.Date, sleep.DurationMS, sleep.Efficiency, sleep.Score, sleep.StagesDeepMS, sleep.StagesREMS, sleep.StagesLightMS, sleep.StagesWakeMS, sleep.CreatedAt)
+	return err
+}
+
+func (d *Database) GetLatestWHOOPSleep(userID string) (*models.WHOOPSleep, error) {
+	query := `SELECT id, user_id, whoop_user_id, date, duration_ms, efficiency, score, stages_deep_ms, stages_rem_ms, stages_light_ms, stages_wake_ms, created_at FROM whoop_sleep WHERE user_id = ? ORDER BY date DESC LIMIT 1`
+	row := d.db.QueryRow(query, userID)
+
+	var sleep models.WHOOPSleep
+	err := row.Scan(&sleep.ID, &sleep.UserID, &sleep.WHOOPUserID, &sleep.Date, &sleep.DurationMS, &sleep.Efficiency, &sleep.Score, &sleep.StagesDeepMS, &sleep.StagesREMS, &sleep.StagesLightMS, &sleep.StagesWakeMS, &sleep.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &sleep, nil
+}
+
+func (d *Database) GetWHOOPSleepForDate(userID string, date time.Time) (*models.WHOOPSleep, error) {
+	dateStr := date.Format("2006-01-02")
+	query := `SELECT id, user_id, whoop_user_id, date, duration_ms, efficiency, score, stages_deep_ms, stages_rem_ms, stages_light_ms, stages_wake_ms, created_at FROM whoop_sleep WHERE user_id = ? AND date = ?`
+	row := d.db.QueryRow(query, userID, dateStr)
+
+	var sleep models.WHOOPSleep
+	err := row.Scan(&sleep.ID, &sleep.UserID, &sleep.WHOOPUserID, &sleep.Date, &sleep.DurationMS, &sleep.Efficiency, &sleep.Score, &sleep.StagesDeepMS, &sleep.StagesREMS, &sleep.StagesLightMS, &sleep.StagesWakeMS, &sleep.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &sleep, nil
+}
+
+// WHOOP Strain operations
+func (d *Database) UpsertWHOOPStrain(strain *models.WHOOPStrain) error {
+	query := `INSERT OR REPLACE INTO whoop_strain (user_id, whoop_user_id, date, score, created_at) 
+			  VALUES (?, ?, ?, ?, ?)`
+	_, err := d.db.Exec(query, strain.UserID, strain.WHOOPUserID, strain.Date, strain.Score, strain.CreatedAt)
+	return err
+}
+
+func (d *Database) GetLatestWHOOPStrain(userID string) (*models.WHOOPStrain, error) {
+	query := `SELECT id, user_id, whoop_user_id, date, score, created_at FROM whoop_strain WHERE user_id = ? ORDER BY date DESC LIMIT 1`
+	row := d.db.QueryRow(query, userID)
+
+	var strain models.WHOOPStrain
+	err := row.Scan(&strain.ID, &strain.UserID, &strain.WHOOPUserID, &strain.Date, &strain.Score, &strain.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &strain, nil
+}
+
+func (d *Database) GetWHOOPStrainForDate(userID string, date time.Time) (*models.WHOOPStrain, error) {
+	dateStr := date.Format("2006-01-02")
+	query := `SELECT id, user_id, whoop_user_id, date, score, created_at FROM whoop_strain WHERE user_id = ? AND date = ?`
+	row := d.db.QueryRow(query, userID, dateStr)
+
+	var strain models.WHOOPStrain
+	err := row.Scan(&strain.ID, &strain.UserID, &strain.WHOOPUserID, &strain.Date, &strain.Score, &strain.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &strain, nil
+}
+
+// Get all team members' latest data for morning standup
+func (d *Database) GetTeamWHOOPDataForStandup() ([]map[string]interface{}, error) {
+	query := `
+		SELECT 
+			u.id, u.username, u.real_name,
+			wr.score as recovery_score, wr.hrv, wr.rhr, wr.date as recovery_date,
+			ws.score as sleep_score, ws.duration_ms, ws.efficiency, ws.date as sleep_date,
+			wst.score as strain_score, wst.date as strain_date
+		FROM users u
+		INNER JOIN whoop_connections wc ON u.id = wc.user_id AND wc.active = 1
+		LEFT JOIN whoop_recovery wr ON u.id = wr.user_id AND wr.date = (
+			SELECT MAX(date) FROM whoop_recovery WHERE user_id = u.id
+		)
+		LEFT JOIN whoop_sleep ws ON u.id = ws.user_id AND ws.date = (
+			SELECT MAX(date) FROM whoop_sleep WHERE user_id = u.id
+		)
+		LEFT JOIN whoop_strain wst ON u.id = wst.user_id AND wst.date = (
+			SELECT MAX(date) FROM whoop_strain WHERE user_id = u.id
+		)`
+
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		var userID, username, realName string
+		var recoveryScore, hrv, rhr sql.NullInt64
+		var recoveryDate, sleepDate, strainDate sql.NullString
+		var sleepScore sql.NullInt64
+		var durationMS sql.NullInt64
+		var efficiency, strainScore sql.NullFloat64
+
+		err := rows.Scan(&userID, &username, &realName, &recoveryScore, &hrv, &rhr, &recoveryDate,
+			&sleepScore, &durationMS, &efficiency, &sleepDate, &strainScore, &strainDate)
+		if err != nil {
+			return nil, err
+		}
+
+		result := map[string]interface{}{
+			"user_id":   userID,
+			"username":  username,
+			"real_name": realName,
+		}
+
+		if recoveryScore.Valid {
+			result["recovery_score"] = recoveryScore.Int64
+			result["hrv"] = hrv.Int64
+			result["rhr"] = rhr.Int64
+			result["recovery_date"] = recoveryDate.String
+		}
+
+		if sleepScore.Valid {
+			result["sleep_score"] = sleepScore.Int64
+			result["duration_ms"] = durationMS.Int64
+			result["efficiency"] = efficiency.Float64
+			result["sleep_date"] = sleepDate.String
+		}
+
+		if strainScore.Valid {
+			result["strain_score"] = strainScore.Float64
+			result["strain_date"] = strainDate.String
+		}
+
+		results = append(results, result)
+	}
+
+	return results, nil
 }

@@ -9,12 +9,16 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	SlackBotToken   string
-	SlackAppToken   string
-	DatabasePath    string
-	PeopleChannel   string
-	GratefulChannel string
-	Debug           bool
+	SlackBotToken    string
+	SlackAppToken    string
+	DatabasePath     string
+	PeopleChannel    string
+	GratefulChannel  string
+	StandupChannel   string
+	WHOOPClientID    string
+	WHOOPClientSecret string
+	WHOOPRedirectURL string
+	Debug            bool
 }
 
 // Load loads configuration from environment variables
@@ -23,12 +27,16 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	config := &Config{
-		SlackBotToken:   os.Getenv("SLACK_BOT_TOKEN"),
-		SlackAppToken:   os.Getenv("SLACK_APP_TOKEN"),
-		DatabasePath:    getEnvOrDefault("DATABASE_PATH", "fambot.db"),
-		PeopleChannel:   getEnvOrDefault("PEOPLE_CHANNEL", "people"),
-		GratefulChannel: getEnvOrDefault("GRATEFUL_CHANNEL", "thankyou"),
-		Debug:           os.Getenv("DEBUG") == "true",
+		SlackBotToken:    os.Getenv("SLACK_BOT_TOKEN"),
+		SlackAppToken:    os.Getenv("SLACK_APP_TOKEN"),
+		DatabasePath:     getEnvOrDefault("DATABASE_PATH", "fambot.db"),
+		PeopleChannel:    getEnvOrDefault("PEOPLE_CHANNEL", "people"),
+		GratefulChannel:  getEnvOrDefault("GRATEFUL_CHANNEL", "thankyou"),
+		StandupChannel:   getEnvOrDefault("STANDUP_CHANNEL", "general"),
+		WHOOPClientID:    os.Getenv("WHOOP_CLIENT_ID"),
+		WHOOPClientSecret: os.Getenv("WHOOP_CLIENT_SECRET"),
+		WHOOPRedirectURL: getEnvOrDefault("WHOOP_REDIRECT_URL", "http://localhost:8080/whoop/callback"),
+		Debug:            os.Getenv("DEBUG") == "true",
 	}
 
 	if err := config.validate(); err != nil {

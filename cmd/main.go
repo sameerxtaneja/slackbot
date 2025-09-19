@@ -15,6 +15,7 @@ import (
 	"github.com/pratikgajjar/fambot-go/internal/config"
 	"github.com/pratikgajjar/fambot-go/internal/database"
 	"github.com/pratikgajjar/fambot-go/internal/handlers"
+	"github.com/pratikgajjar/fambot-go/internal/whoop"
 )
 
 func main() {
@@ -60,8 +61,20 @@ func main() {
 	}
 	log.Printf("Bot authenticated as %s (%s)", authTest.User, authTest.UserID)
 
+	// Initialize WHOOP services (if configured)
+	var whoopService *whoop.Service
+	var whoopServer *whoop.OAuthServer
+	if cfg.WHOOPClientID != "" && cfg.WHOOPClientSecret != "" {
+		whoopClient := whoop.NewClient(cfg.WHOOPClientID, cfg.WHOOPClientSecret, cfg.WHOOPRedirectURL)
+		whoopService = whoop.NewService(whoopClient, db)
+		whoopServer = whoop.NewOAuthServer(whoopService, "8080")
+		log.Printf("WHOOP integration enabled")
+	} else {
+		log.Printf("WHOOP integration disabled - missing WHOOP_CLIENT_ID or WHOOP_CLIENT_SECRET")
+	}
+
 	// Initialize handlers
-	handler := handlers.New(client, db, cfg.PeopleChannel, cfg.GratefulChannel)
+	handler := handlers.New(client, db, cfg.PeopleChannel, cfg.GratefulChannel, cfg.StandupChannel, whoopService)
 	handler.SetBotID(authTest.UserID)
 	handler.SetWorkspaceID(authTest.TeamID)
 
@@ -92,6 +105,17 @@ func main() {
 		log.Printf("Failed to add anniversary cron job: %v", err)
 	}
 
+	// Add WHOOP morning standup (if WHOOP is configured)
+	if whoopService != nil {
+		_, err = c.AddFunc("0 9 * * *", func() {
+			log.Println("Running morning WHOOP standup...")
+			handler.SendMorningStandup()
+		})
+		if err != nil {
+			log.Printf("Failed to add WHOOP standup cron job: %v", err)
+		}
+	}
+
 	// Start cron scheduler
 	c.Start()
 	defer c.Stop()
@@ -103,6 +127,15 @@ func main() {
 	// Handle interrupt signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Start OAuth server (if WHOOP is configured)
+	if whoopServer != nil {
+		go func() {
+			if err := whoopServer.Start(); err != nil {
+				log.Printf("OAuth server error: %v", err)
+			}
+		}()
+	}
 
 	// Start socket mode client in a goroutine
 	go func() {

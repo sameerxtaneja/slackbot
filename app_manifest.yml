@@ -27,6 +27,22 @@ features:
       description: set work anniversary
       usage_hint: MM/DD/YYYY
       should_escape: false
+    - command: /connect-whoop
+      description: Connect your WHOOP account
+      usage_hint: Connect to show your data in morning standups
+      should_escape: false
+    - command: /whoop-status
+      description: Check your WHOOP data
+      usage_hint: Show your latest sleep, recovery, and strain data
+      should_escape: false
+    - command: /morning-report
+      description: Generate team WHOOP morning report
+      usage_hint: Show team sleep and recovery stats
+      should_escape: false
+    - command: /disconnect-whoop
+      description: Disconnect your WHOOP account
+      usage_hint: Remove WHOOP integration
+      should_escape: false
 oauth_config:
   scopes:
     user:
